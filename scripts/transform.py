@@ -42,23 +42,42 @@ def main():
     else:
         raise ValueError(f"Target column '{TARGET}' not found.")
 
-    # Remove one feature from each manually identified correlated pair
-    to_drop = set()
-    for f1, f2 in manual_drop_corr_pairs:
-        if f1 in df.columns and f2 in df.columns:
-            to_drop.add(f2)  # drop second of pair
+    # Prevent dropping these key columns
+    protected_features = {"Sale_Price", "Log_SalePrice"}
 
-    # Auto-detect additional multicollinearity (numeric only)
-    corr_matrix = df.select_dtypes(include=np.number).corr().abs()
+    # Get absolute correlation matrix for numeric features
+    numeric_df = df.select_dtypes(include=np.number)
+    corr_matrix = numeric_df.corr().abs()
+
+    # Compute feature-target correlations
+    target_corrs = corr_matrix["Sale_Price"].drop("Sale_Price")
+
+    # Initialize set for dropping
+    to_drop = set()
+
+    # Examine upper triangle of the correlation matrix
     upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
 
-    auto_drop = [
-                    column for column in upper.columns 
-                    if any(upper[column] > CORR_THRESHOLD) and column not in {TARGET, LOG_TARGET}
-                ]
-    to_drop.update(auto_drop)
+    for col1 in upper.columns:
+        for col2 in upper.index:
+            if col1 != col2 and upper.loc[col2, col1] > CORR_THRESHOLD:
+                if col1 in protected_features or col2 in protected_features:
+                    continue  # Skip dropping protected features
 
-    df.drop(columns=[col for col in to_drop if col in df.columns], inplace=True)
+                # Check correlation with target
+                corr1 = abs(corr_matrix.at[col1, "Sale_Price"]) if col1 in corr_matrix.columns else 0
+                corr2 = abs(corr_matrix.at[col2, "Sale_Price"]) if col2 in corr_matrix.columns else 0
+
+                # Drop the one less correlated with target
+                if corr1 >= corr2:
+                    to_drop.add(col2)
+                else:
+                    to_drop.add(col1)
+
+    # Drop final list (if still present in df)
+    df.drop(columns=list(to_drop & set(df.columns)), inplace=True)
+    print(f"[INFO] Dropped {len(to_drop)} multicollinear features.")
+
 
     # Sanity check: No missing values?
     missing = df.isnull().sum().sum()
