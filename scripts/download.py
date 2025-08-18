@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-# downloads.py
-
 import os
 import sys
 import pandas as pd
