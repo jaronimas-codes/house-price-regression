@@ -2,6 +2,7 @@
 artifacts/
 *.pkl
 *.joblib
+/artifacts
 
 
 # Byte-compiled / optimized / DLL files
