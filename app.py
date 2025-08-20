@@ -226,17 +226,44 @@ st.title("🏡 House Prices — Full ML Workflow")
 tab_dl, tab_eda, tab_clean, tab_train, tab_status, tab_predict = st.tabs([
     "📥 Download Data", "📊 Run EDA", "🧼 Transform", "🧠 Train", "📈 Model Status", "🎯 Predict"])
 
+RAW_PATH = Path("data/raw/ames_openml.csv")
+
 with tab_dl:
     st.subheader("📥 Download Ames Housing Dataset")
-    if st.button("Download from OpenML", type="primary"):
-        with st.spinner("📡 Downloading and saving dataset..."):
+
+    col1, col2 = st.columns([1,1])
+    with col1:
+        if st.button("Download from OpenML", type="primary"):
+            with st.spinner("📡 Downloading from OpenML (with retries)…"):
+                try:
+                    csv_path = run_download(RAW_PATH, retries=4, pause=2.5)
+                    st.success(f"✅ Downloaded to {csv_path}")
+                    st.dataframe(pd.read_csv(csv_path).head())
+                except Exception as e:
+                    st.error(f"❌ Download failed: {e}")
+
+    with col2:
+        # Manual fallback: upload a CSV
+        up = st.file_uploader("Or upload ames_openml.csv", type=["csv"])
+        if up:
+            RAW_PATH.parent.mkdir(parents=True, exist_ok=True)
+            df = pd.read_csv(up)
+            df.to_csv(RAW_PATH, index=False)
+            st.success(f"✅ Uploaded and saved to {RAW_PATH}")
+            st.dataframe(df.head())
+
+    # Optional: user-provided URL fallback
+    with st.expander("Paste a direct CSV URL (fallback)"):
+        url = st.text_input("Direct CSV URL")
+        if st.button("Fetch from URL") and url:
             try:
-                csv_path = run_download(Path("data/raw/ames_openml.csv"))
-                st.success("✅ Dataset downloaded successfully!")
-                df = pd.read_csv(csv_path, low_memory=False)
+                df = pd.read_csv(url)
+                RAW_PATH.parent.mkdir(parents=True, exist_ok=True)
+                df.to_csv(RAW_PATH, index=False)
+                st.success(f"✅ Downloaded from URL and saved to {RAW_PATH}")
                 st.dataframe(df.head())
             except Exception as e:
-                st.error(f"❌ Download failed: {e}")
+                st.error(f"❌ Could not load CSV from URL: {e}")
 
 
 

@@ -1,45 +1,52 @@
 # scripts/download.py
 from __future__ import annotations
 from pathlib import Path
-import sys
+import time
 import pandas as pd
 from sklearn.datasets import fetch_openml
 
 DEFAULT_OUT = Path("data/raw/ames_openml.csv")
 
-def run_download(out_path: Path = DEFAULT_OUT) -> Path:
-    """Download the Ames Housing dataset from OpenML and save as CSV."""
+OPENML_CANDIDATES = [
+    # common aliases on OpenML; one of these usually works
+    {"name": "ames_housing", "version": 1},
+    {"name": "house_prices", "version": 1},
+]
+
+def _try_fetch_once() -> pd.DataFrame:
+    last_err = None
+    for cfg in OPENML_CANDIDATES:
+        try:
+            return fetch_openml(as_frame=True, **cfg).frame
+        except Exception as e:
+            last_err = e
+    raise RuntimeError(f"Could not fetch dataset from OpenML: {last_err}")
+
+def run_download(out_path: Path = DEFAULT_OUT, retries: int = 3, pause: float = 2.5) -> Path:
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Try common OpenML names, use first that works
+    # If we already have a file, prefer using it (helps when OpenML is flaky)
+    if out_path.exists() and out_path.stat().st_size > 0:
+        return out_path
+
     last_err = None
-    for name, kwargs in [
-        ("ames_housing", {"version": 1}),
-        ("house_prices", {"version": 1}),
-    ]:
+    for attempt in range(1, retries + 1):
         try:
-            df = fetch_openml(name=name, as_frame=True, **kwargs).frame
-            break
+            df = _try_fetch_once()
+            df.to_csv(out_path, index=False)
+            # quick integrity check
+            chk = pd.read_csv(out_path, nrows=5)
+            if len(chk.columns) == 0:
+                raise RuntimeError("Downloaded CSV seems empty")
+            return out_path
         except Exception as e:
             last_err = e
-            df = None
-    if df is None:
-        raise RuntimeError(f"Could not fetch dataset from OpenML: {last_err}")
-
-    df.to_csv(out_path, index=False)
-
-    # Verify readability
-    _chk = pd.read_csv(out_path, low_memory=False)
-    if _chk.empty or _chk.shape[1] == 0:
-        raise RuntimeError("Saved CSV seems empty/corrupt")
-
-    return out_path
+            if attempt < retries:
+                time.sleep(pause * attempt)  # backoff
+            else:
+                raise RuntimeError(f"OpenML download failed after {retries} tries: {last_err}")
 
 if __name__ == "__main__":
-    try:
-        dest = run_download(DEFAULT_OUT)
-        print(f"[OK] Saved and verified: {dest}")
-    except Exception as e:
-        print(f"[ERROR] {e}", file=sys.stderr)
-        sys.exit(1)
+    p = run_download()
+    print(f"[OK] Saved: {p}")
