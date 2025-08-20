@@ -11,6 +11,7 @@ from sklearn.metrics import mean_absolute_error, root_mean_squared_error, r2_sco
 from sklearn.inspection import permutation_importance
 from scripts.eda import run_visual_eda
 from scripts.download import run_download
+from scripts.transform import run_transform
 
 import time
 from pathlib import Path
@@ -254,7 +255,12 @@ with tab_eda:
 with tab_clean:
     st.subheader("Transform raw → cleaned")
     if st.button("Run transformation script"):
-        call_script(["python", "scripts/transform.py"])
+        try:
+            csv_path = run_transform(Path("data/raw/ames_openml.csv"), Path("data/processed/ames_cleaned.csv"))
+            st.success(f"✅ Cleaned dataset saved to: {csv_path}")
+            st.dataframe(pd.read_csv(csv_path, nrows=200))
+        except Exception as e:
+            st.error(f"❌ Transform failed: {e}")
 
 with tab_train:
     st.subheader("Train model (Linear Reg, RandomForest, XGB)")
