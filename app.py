@@ -513,17 +513,18 @@ with tab_predict:
 
         # Compact inputs in a 4-column grid (labels collapsed)
         GRID_COLS = 4
-        cols = st.columns(GRID_COLS, vertical_alignment="center")
-
-        user_values = {}
         
+        # tighter columns
+        cols = st.columns(GRID_COLS, gap="small")
+        user_values = {}
+
         for i, feat in enumerate(rank_list[:k]):
             s = specs.get(feat, {"kind": "float", "min": 0.0, "median": defaults.get(feat, 0.0), "max": 1.0})
             kind = s["kind"]
             lo, mid, hi = s.get("min", 0.0), s.get("median", defaults.get(feat, 0.0)), s.get("max", 1.0)
 
             with cols[i % GRID_COLS]:
-                # --- tiny label ABOVE the input ---
+                # Visible label (our own, above the widget)
                 st.markdown(
                     f"<div style='font-size:0.85rem; font-weight:500; margin-bottom:0.25rem;'>{feat}</div>",
                     unsafe_allow_html=True
@@ -531,13 +532,22 @@ with tab_predict:
 
                 if kind == "binary":
                     init_bool = bool(int(defaults.get(feat, 0.0)))
-                    val = st.toggle("", value=init_bool, key=f"feat_{feat}", label_visibility="collapsed")
+                    # IMPORTANT: give a real label, but collapse it
+                    val = st.toggle(
+                        label=feat, value=init_bool, key=f"feat_{feat}",
+                        label_visibility="collapsed"
+                    )
                     user_values[feat] = 1.0 if val else 0.0
 
                 elif kind == "int":
                     val = st.number_input(
-                        "", min_value=int(lo), max_value=int(hi) if int(hi) > int(lo) else None,
-                        value=int(mid), step=1, key=f"feat_{feat}", label_visibility="collapsed"
+                        label=feat,  # non-empty to satisfy Streamlit
+                        min_value=int(lo),
+                        max_value=int(hi) if int(hi) > int(lo) else None,
+                        value=int(mid),
+                        step=1,
+                        key=f"feat_{feat}",
+                        label_visibility="collapsed"  # keeps UI compact
                     )
                     user_values[feat] = float(int(val))
 
@@ -545,9 +555,14 @@ with tab_predict:
                     span = float(hi) - float(lo)
                     step = 0.1 if span <= 10 else 0.5 if span <= 100 else 1.0
                     val = st.number_input(
-                        "", min_value=float(lo), max_value=float(hi) if float(hi) > float(lo) else None,
-                        value=float(mid), step=step, key=f"feat_{feat}",
-                        label_visibility="collapsed", format="%.3f"
+                        label=feat,  # non-empty label
+                        min_value=float(lo),
+                        max_value=float(hi) if float(hi) > float(lo) else None,
+                        value=float(mid),
+                        step=step,
+                        key=f"feat_{feat}",
+                        label_visibility="collapsed",
+                        format="%.3f"
                     )
                     user_values[feat] = float(val)
 
