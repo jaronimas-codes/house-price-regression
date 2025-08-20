@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import mean_absolute_error, root_mean_squared_error, r2_score
 from sklearn.inspection import permutation_importance
 from scripts.eda import run_visual_eda
+from scripts.download import run_download
 
 import time
 from pathlib import Path
@@ -226,23 +227,15 @@ tab_dl, tab_eda, tab_clean, tab_train, tab_status, tab_predict = st.tabs([
 
 with tab_dl:
     st.subheader("📥 Download Ames Housing Dataset")
-
     if st.button("Download from OpenML", type="primary"):
         with st.spinner("📡 Downloading and saving dataset..."):
-            result = subprocess.run(["python", "scripts/download.py"], capture_output=True, text=True)
-            if result.returncode == 0:
+            try:
+                csv_path = run_download(Path("data/raw/ames_openml.csv"))
                 st.success("✅ Dataset downloaded successfully!")
-                
-                # ✅ Try loading and previewing the saved dataset
-                try:
-                    df = pd.read_csv("data/raw/ames_openml.csv", low_memory=False)
-                    st.markdown("#### 📄 Preview of the dataset:")
-                    st.dataframe(df.head())
-                except Exception as e:
-                    st.warning(f"Download succeeded but couldn't load preview: {e}")
-            else:
-                st.error("❌ Download failed")
-                st.code(result.stderr or "No error message.")
+                df = pd.read_csv(csv_path, low_memory=False)
+                st.dataframe(df.head())
+            except Exception as e:
+                st.error(f"❌ Download failed: {e}")
 
 
 
