@@ -313,80 +313,278 @@ with tab_status:
             coef = np.asarray(final_est.coef_)
             importances = np.abs(coef.ravel() if coef.ndim > 1 else coef)
 
-        # if importances is not None and len(importances) > 0:
-        #     names = list(post_names)
-        #     n = min(len(names), len(importances))
-        #     if n == 0:
-        #         st.info("Model exposes importances, but feature names are unavailable.")
-        #     else:
-        #         fi_df = pd.DataFrame({
-        #             "Feature": names[:n],
-        #             "Importance": importances[:n]
-        #         }).sort_values("Importance", ascending=False).head(20)
+        if importances is not None and len(importances) > 0:
+            names = list(post_names)
+            n = min(len(names), len(importances))
+            if n == 0:
+                st.info("Model exposes importances, but feature names are unavailable.")
+            else:
+                fi_df = pd.DataFrame({
+                    "Feature": names[:n],
+                    "Importance": importances[:n]
+                }).sort_values("Importance", ascending=False).head(20)
 
-        #         st.markdown("### 🔍 Feature Importance")
-        #         fig, ax = plt.subplots(figsize=(8, 5))
-        #         sns.barplot(
-        #             data=fi_df,
-        #             x="Importance",
-        #             y="Feature",
-        #             hue="Feature",
-        #             dodge=False,
-        #             legend=False,
-        #             ax=ax
-        #         )
-        #         ax.set_title("Top 20 Feature Importances")
-        #         st.pyplot(fig)
-        # else:
-        #     st.info("This model doesn’t expose feature importances/coefficients. Try RandomForest/XGB or use permutation importances.")
+                st.markdown("### 🔍 Feature Importance")
+                fig, ax = plt.subplots(figsize=(8, 5))
+                sns.barplot(
+                    data=fi_df,
+                    x="Importance",
+                    y="Feature",
+                    hue="Feature",
+                    dodge=False,
+                    legend=False,
+                    ax=ax
+                )
+                ax.set_title("Top 20 Feature Importances")
+                st.pyplot(fig)
+        else:
+            st.info("This model doesn’t expose feature importances/coefficients. Try RandomForest/XGB or use permutation importances.")
+            
 
+
+from datetime import datetime
+
+# ---------- Prefill + UI typing from a specific CSV (model feature space) ----------
+PREFERRED_REF = "data/processed/ames_cleaned.csv"
+POSSIBLE_TARGETS_ALL = ["Log_SalePrice","SalePrice","Sale_Price","saleprice","sale_price","PRICE","price"]
+
+# name hints for integers
+_INT_NAME_HINTS = (
+    "year","yr","garagecars","garage_cars","fullbath","full_bath","halfbath","half_bath",
+    "kitchen","bedroom","bedrooms","totrms","rooms","bsmt_full_bath","bsmt_half_bath",
+    "fireplaces","mosold","mo_sold","month","mo","day"
+)
+
+def _align_like_training_ui(df: pd.DataFrame, feature_names: list[str]) -> pd.DataFrame:
+    X = df.drop(columns=[c for c in POSSIBLE_TARGETS_ALL if c in df.columns], errors="ignore").copy()
+    obj_cols = X.select_dtypes(exclude=[np.number]).columns.tolist()
+    if obj_cols:
+        X = pd.get_dummies(X, columns=obj_cols, drop_first=False)
+    for col in feature_names:
+        if col not in X.columns:
+            X[col] = 0.0
+    extra = [c for c in X.columns if c not in feature_names]
+    if extra:
+        X = X.drop(columns=extra)
+    return X[feature_names]
+
+def _infer_kind(col_values: np.ndarray, name: str) -> str:
+    """Return 'binary' | 'int' | 'float' based on values (w/ name hints)."""
+    v = col_values[np.isfinite(col_values)]
+    if v.size == 0:
+        return "int" if any(h in name.lower() for h in _INT_NAME_HINTS) else "float"
+    uniq = np.unique(np.round(v, 6))
+    if set(uniq).issubset({0.0, 1.0}):
+        return "binary"
+    if np.allclose(v, np.round(v)) or any(h in name.lower() for h in _INT_NAME_HINTS):
+        return "int"
+    return "float"
+
+def _domain_bounds(name: str) -> tuple[float|None, float|None, str|None]:
+    """
+    Return (min, max, kind_hint) by feature name.
+    kind_hint can tighten type to 'int' for year/month/day even if values looked floaty.
+    """
+    n = name.lower()
+    cur_year = datetime.now().year
+
+    # counts (never negative)
+    if any(k in n for k in [
+        "fireplace","fullbath","full_bath","halfbath","half_bath",
+        "bsmt_full_bath","bsmt_half_bath","bedroom","bedrooms",
+        "kitchen","totrms","rooms","garagecars","garage_cars"
+    ]):
+        return 0, None, "int"
+
+    # areas/square footage (never negative)
+    if any(k in n for k in [
+        "sf","area","porch","deck","wooddeck","openporch","enclosedporch","screenporch",
+        "3ssnporch","lotfrontage","lot_frontage","masvnrarea","poolarea","miscval"
+    ]):
+        return 0.0, None, "float"
+
+    # years
+    if "year" in n or n.endswith("_yr_blt") or n.endswith("yrblt") or "yr" in n:
+        return 1870, cur_year + 1, "int"
+
+    # months/days
+    if "mosold" in n or "month" in n or n.startswith("mo_") or n.endswith("_mo"):
+        return 1, 12, "int"
+    if "day" in n:
+        return 1, 31, "int"
+
+    return None, None, None
+
+def build_defaults_and_ui_specs_from_csv(ref_path: str, feature_names: list[str]) -> tuple[dict, dict]:
+    """
+    Returns:
+      defaults: {feat -> numeric default (median or 0/1)}
+      ui_specs: {feat -> {"kind": "binary|int|float", "min": ..., "median": ..., "max": ...}}
+    """
+    defaults = {c: 0.0 for c in feature_names}
+    specs    = {c: {"kind":"float","min":0.0,"median":0.0,"max":1.0} for c in feature_names}
+
+    try:
+        ref = pd.read_csv(ref_path, low_memory=False)
+    except Exception:
+        return defaults, specs
+
+    Xdf = _align_like_training_ui(ref, feature_names)
+    X   = Xdf.to_numpy(dtype=float)
+
+    q01 = np.nanquantile(X, 0.01, axis=0)
+    med = np.nanmedian(X, axis=0)
+    q99 = np.nanquantile(X, 0.99, axis=0)
+
+    for i, c in enumerate(feature_names):
+        lo, m, hi = float(q01[i]), float(med[i]), float(q99[i])
+
+        # infer type from data + name
+        kind = _infer_kind(X[:, i], c)
+        mn, mx, kind_hint = _domain_bounds(c)
+        if kind_hint == "int" and kind != "binary":
+            kind = "int"  # force integers for year/month/day/etc.
+
+        # widen a tiny bit, then clamp with domain rules
+        rng = hi - lo
+        if not np.isfinite(rng) or rng <= 0:
+            lo, hi = m - 1.0, m + 1.0
+        else:
+            lo = lo - 0.05*rng
+            hi = hi + 0.05*rng
+
+        if mn is not None: lo = max(lo, mn)
+        if mx is not None: hi = min(hi, mx)
+
+        # finalize per kind
+        if kind == "binary":
+            defaults[c] = 1.0 if m >= 0.5 else 0.0
+            specs[c]    = {"kind":"binary","min":0.0,"median":defaults[c],"max":1.0}
+        elif kind == "int":
+            lo_i = int(np.floor(lo))
+            hi_i = int(np.ceil(hi))
+            if lo_i >= hi_i: hi_i = lo_i + 1
+            m_i  = int(np.clip(np.round(m), lo_i, hi_i))
+            defaults[c] = float(m_i)
+            specs[c]    = {"kind":"int","min":lo_i,"median":m_i,"max":hi_i}
+        else:  # float
+            # ensure median within [lo, hi]
+            m_f = float(np.clip(m, lo, hi))
+            defaults[c] = m_f
+            specs[c]    = {"kind":"float","min":float(lo),"median":m_f,"max":float(hi)}
+    return defaults, specs
 
 
 with tab_predict:
-    st.subheader("Predict from top-K most important features")
+    st.subheader("🎯 Predict from top-K most important features")
 
-    cache_bust = st.session_state.get("model_updated_at", 0.0)   # <-- add this
-    model, feature_names, summary, _ = load_best_model(MODELS_DIR, cache_bust)  # <-- replace old call
+    # refresh after training
+    cache_bust = st.session_state.get("model_updated_at", 0.0)
+    model, feature_names, summary, _ = load_best_model(MODELS_DIR, cache_bust)
 
     if model is None or not feature_names:
         st.warning("Train a model first so we know the required features.")
     else:
+        # Feature ranking (your existing helper)
         rank_list, imp_df = get_feature_ranking(model, feature_names, CLEAN_DEFAULT)
-        topN = min(25, len(rank_list))
-        show_df = imp_df.head(topN).copy()
-        st.markdown("**Top feature importances (sorted):**")
-        if "importance" in show_df.columns and show_df["importance"].notna().any():
-            st.dataframe(show_df.style.format({"importance": "{:.6f}"}), use_container_width=True)
-            st.bar_chart(show_df.set_index("feature")["importance"])
-        else:
-            st.info("No numeric importances available; using default feature order.")
-        st.divider()
+        if not rank_list:
+            rank_list = feature_names
 
-        defaults = {}
-        if exists(CLEAN_DEFAULT):
-            ref = pd.read_csv(CLEAN_DEFAULT, nrows=5000)
-            for col in feature_names:
-                if col in ref.columns and np.issubdtype(ref[col].dtype, np.number):
-                    defaults[col] = float(np.nanmedian(ref[col]))
-                else:
-                    defaults[col] = 0.0
+        # --------- Prefill from data/processed/ames_cleaned.csv ----------
+        if os.path.exists(PREFERRED_REF):
+            defaults, specs = build_defaults_and_ui_specs_from_csv(PREFERRED_REF, feature_names)
+            st.caption(f"Prefilled from medians in **{PREFERRED_REF}**. Binary features → checkbox; integers → integer slider.")
         else:
-            for col in feature_names:
-                defaults[col] = 0.0
+            # last-resort fallback
+            defaults = {c: 0.0 for c in feature_names}
+            specs = {c: {"kind":"float","min":0.0,"median":0.0,"max":1.0} for c in feature_names}
+            st.caption("Prefill fallback: reference file not found, using 0.0 defaults.")
 
-        k = st.slider("How many top features to edit?", min_value=5, max_value=min(50, len(rank_list)), value=min(20, len(rank_list)))
-        st.caption("Only the top‑K important features are shown below. All remaining features use dataset medians.")
+        k = st.slider(
+                    "How many top features to edit?",
+                    min_value=4,
+                    max_value=min(48, len(rank_list)),  # keep multiple of 4 so grid fills nicely
+                    value=min(20, len(rank_list)),
+                    step=4
+                    )
+                
+        
+        st.caption("Only the top-K features are shown below. Others are held at dataset medians.")
+
+        # Compact inputs in a 4-column grid (labels collapsed)
+        GRID_COLS = 4
+        cols = st.columns(GRID_COLS, vertical_alignment="center")
+
         user_values = {}
-        cols = st.columns(2)
-        for i, col in enumerate(rank_list[:k]):
-            with cols[i % 2]:
-                user_values[col] = st.number_input(col, value=float(defaults.get(col, 0.0)))
+        
+        for i, feat in enumerate(rank_list[:k]):
+            s = specs.get(feat, {"kind": "float", "min": 0.0, "median": defaults.get(feat, 0.0), "max": 1.0})
+            kind = s["kind"]
+            lo, mid, hi = s.get("min", 0.0), s.get("median", defaults.get(feat, 0.0)), s.get("max", 1.0)
 
-        full_vec = {c: defaults.get(c, 0.0) for c in feature_names}
+            with cols[i % GRID_COLS]:
+                # --- tiny label ABOVE the input ---
+                st.markdown(
+                    f"<div style='font-size:0.85rem; font-weight:500; margin-bottom:0.25rem;'>{feat}</div>",
+                    unsafe_allow_html=True
+                )
+
+                if kind == "binary":
+                    init_bool = bool(int(defaults.get(feat, 0.0)))
+                    val = st.toggle("", value=init_bool, key=f"feat_{feat}", label_visibility="collapsed")
+                    user_values[feat] = 1.0 if val else 0.0
+
+                elif kind == "int":
+                    val = st.number_input(
+                        "", min_value=int(lo), max_value=int(hi) if int(hi) > int(lo) else None,
+                        value=int(mid), step=1, key=f"feat_{feat}", label_visibility="collapsed"
+                    )
+                    user_values[feat] = float(int(val))
+
+                else:  # float
+                    span = float(hi) - float(lo)
+                    step = 0.1 if span <= 10 else 0.5 if span <= 100 else 1.0
+                    val = st.number_input(
+                        "", min_value=float(lo), max_value=float(hi) if float(hi) > float(lo) else None,
+                        value=float(mid), step=step, key=f"feat_{feat}",
+                        label_visibility="collapsed", format="%.3f"
+                    )
+                    user_values[feat] = float(val)
+
+
+        # Build full vector: medians for all, override top-K with user inputs
+        full_vec = {c: float(defaults.get(c, 0.0)) for c in feature_names}
         for kcol, v in user_values.items():
-            full_vec[kcol] = v
+            full_vec[kcol] = float(v)
 
+        # Predict
         if st.button("Predict price", type="primary"):
             X_df = pd.DataFrame([full_vec])[feature_names]
-            pred = float(model.predict(X_df.to_numpy(dtype=float))[0])
-            st.success(f"Predicted SalePrice: **${pred:,.0f}**")
+            yhat = float(model.predict(X_df.to_numpy(dtype=float))[0])
+            # If your model predicted log price, convert back
+            try:
+                price = float(np.expm1(yhat))
+                show_price = price if np.isfinite(price) and price > 0 else yhat
+            except Exception:
+                show_price = yhat
+
+            st.success(f"Predicted SalePrice: **${show_price:,.0f}**")
+
+            # Optional ±MAE range from training summary
+            sel = summary.get("selected_model")
+            real_mae = summary.get("metrics", {}).get(sel, {}).get("real_mae", None)
+            if real_mae is not None and np.isfinite(real_mae):
+                lo = max(0.0, show_price - real_mae)
+                hi = show_price + real_mae
+                st.markdown(
+                                f"<p style='font-size:1rem; color:gray;'>"
+                                f"Expected range (±MAE): ${lo:,.0f} – ${hi:,.0f}"
+                                f"</p>",
+                                unsafe_allow_html=True
+                            )
+
+
+
+
+
+
