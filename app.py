@@ -32,6 +32,10 @@ MODELS_DIR    = os.path.join(ARTIFACTS, "models")
 # ---------------------- utilities ----------------------
 def exists(p): return os.path.exists(p)
 
+@st.cache_data
+def load_local_csv(path: Path) -> pd.DataFrame:
+    return pd.read_csv(path, low_memory=False)
+
 @st.cache_data(show_spinner=False)
 def load_best_model(model_dir: str, cache_bust: float):
     """
@@ -228,17 +232,44 @@ tab_dl, tab_eda, tab_clean, tab_train, tab_status, tab_predict = st.tabs([
 
 RAW_PATH = Path("data/raw/ames_openml.csv")
 
-with tab_dl:
-    st.subheader("📥 Download Ames Housing Dataset")
+RAW_PATH = Path("data/raw/ames_openml.csv")
 
-    if st.button("Download from OpenML", type="primary"):
-        with st.spinner("📡 Downloading from OpenML (with retries)…"):
-            try:
-                csv_path = run_download(RAW_PATH, retries=4, pause=2.5)
-                st.success(f"✅ Downloaded to {csv_path}")
-                st.dataframe(pd.read_csv(csv_path).head())
-            except Exception as e:
-                st.error(f"❌ Download failed: {e}")
+
+
+with tab_dl:
+    st.subheader("📥 Get Ames Housing dataset")
+
+    # ✅ Default is OFF → use local CSV (no network)
+    use_online = st.checkbox("Use online OpenML download", value=False, help="When ON, try fetching from OpenML with retries. When OFF, use the committed CSV or your upload.")
+
+    # Upload fallback (always available)
+    up = st.file_uploader("Upload CSV (optional, overrides local file)", type=["csv"], key="raw_upload")
+    if up:
+        RAW_PATH.parent.mkdir(parents=True, exist_ok=True)
+        df_up = pd.read_csv(up)
+        df_up.to_csv(RAW_PATH, index=False)
+        st.success(f"✅ Uploaded and saved to {RAW_PATH}")
+        st.dataframe(df_up.head())
+
+    # Main action button
+    if st.button("Load dataset", type="primary"):
+        try:
+            if use_online:
+                with st.spinner("📡 Downloading from OpenML (with retries)…"):
+                    csv_path = run_download(RAW_PATH, retries=4, pause=2.5)
+                    st.success(f"✅ Downloaded to {csv_path}")
+                    df = load_local_csv(csv_path)
+                    st.dataframe(df.head())
+            else:
+                # Offline path: only local file or the uploaded one
+                if not RAW_PATH.exists() or RAW_PATH.stat().st_size == 0:
+                    st.error(f"❌ No local file found at {RAW_PATH}. Upload a CSV or enable online download.")
+                else:
+                    df = load_local_csv(RAW_PATH)
+                    st.success(f"✅ Loaded local CSV: {RAW_PATH}")
+                    st.dataframe(df.head())
+        except Exception as e:
+            st.error(f"❌ Could not load dataset: {e}")
 
     
 

@@ -6,6 +6,8 @@ artifacts/
 /data
 data/
 
+!data/raw/ames_openml.csv
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
