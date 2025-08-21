@@ -1,5 +1,6 @@
 # app.py
 import os, sys, json, subprocess
+import time
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -7,14 +8,14 @@ import joblib
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+from pathlib import Path
 from sklearn.metrics import mean_absolute_error, root_mean_squared_error, r2_score
 from sklearn.inspection import permutation_importance
 from scripts.eda import run_visual_eda
 from scripts.download import run_download
 from scripts.transform import run_transform
+from scripts.train import run_train, MODEL_DIR, DATA_PATH
 
-import time
-from pathlib import Path
 
 def file_mtime(path: str) -> float:
     try:
@@ -298,14 +299,23 @@ with tab_clean:
             st.error(f"❌ Transform failed: {e}")
 
 with tab_train:
-    st.subheader("Train model (Linear Reg, RandomForest, XGB)")
-    if st.button("Train models now"):
-        ok = call_script(["python", "scripts/train.py"])
-        if ok:
-            st.success("✅ Training completed.")
-            # mark update time and force a rerun so status tab sees new files
-            st.session_state["model_updated_at"] = time.time()
-            # st.rerun()
+    st.subheader("🏋️ Train models")
+    if st.button("Start training", type="primary"):
+        with st.spinner("Training models…"):
+            try:
+                result = run_train(DATA_PATH)  # uses data/processed/ames_cleaned.csv
+                st.success(f"✅ Trained. Best model: {result['selected_model']}")
+                # Show metrics
+                with open(Path(MODEL_DIR) / "metrics_summary.json", "r", encoding="utf-8") as f:
+                    summary = json.load(f)
+                st.json(summary)
+                # Optional: show PNG plots if they exist
+                r2_png   = Path(MODEL_DIR) / "plots" / "r2_scores.png"
+                mae_png  = Path(MODEL_DIR) / "plots" / "real_mae_scores.png"
+                if r2_png.exists():  st.image(str(r2_png))
+                if mae_png.exists(): st.image(str(mae_png))
+            except Exception as e:
+                st.error(f"❌ Training failed: {e}")
 
 with tab_status:
     st.subheader("Model status")
