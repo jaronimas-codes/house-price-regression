@@ -304,16 +304,48 @@ with tab_train:
         with st.spinner("Training models…"):
             try:
                 result = run_train(DATA_PATH)  # uses data/processed/ames_cleaned.csv
+                
+                
                 st.success(f"✅ Trained. Best model: {result['selected_model']}")
-                # Show metrics
+
+                # --- Load summary produced by training ---
                 with open(Path(MODEL_DIR) / "metrics_summary.json", "r", encoding="utf-8") as f:
                     summary = json.load(f)
-                st.json(summary)
-                # Optional: show PNG plots if they exist
-                r2_png   = Path(MODEL_DIR) / "plots" / "r2_scores.png"
-                mae_png  = Path(MODEL_DIR) / "plots" / "real_mae_scores.png"
-                if r2_png.exists():  st.image(str(r2_png))
-                if mae_png.exists(): st.image(str(mae_png))
+
+                # ---------- Nice KPIs ----------
+                best = summary.get("selected_model", "")
+                metrics = summary.get("metrics", {})
+
+                # Convert to DataFrame
+                if isinstance(metrics, dict):
+                    df_metrics = (
+                        pd.DataFrame(metrics).T.reset_index()
+                        .rename(columns={"index": "Model", "mae": "Log MAE", "real_mae": "MAE (real)", "r2": "R²"})
+                        .loc[:, ["Model", "R²", "MAE (real)", "Log MAE"]]
+                        .sort_values("R²", ascending=False)
+                        .reset_index(drop=True)
+                    )
+                else:
+                    df_metrics = pd.DataFrame(columns=["Model", "R²", "MAE (real)", "Log MAE"])
+
+                st.markdown("### 📊 Model Metrics")
+                st.caption("ℹ️ **How to read this:** R² → higher is better.  MAE → lower is better.")
+                st.dataframe(
+                    df_metrics.style.format({"R²": "{:.3f}", "MAE (real)": "{:.0f}", "Log MAE": "{:.3f}"})
+                            .highlight_max(subset=["R²"], color="#e6ffe6")
+                )
+
+                # ---------- Plots (if present) ----------
+                r2_png  = Path(MODEL_DIR) / "plots" / "r2_scores.png"
+                mae_png = Path(MODEL_DIR) / "plots" / "real_mae_scores.png"
+                if r2_png.exists() or mae_png.exists():
+                    st.markdown("### 📈 Plots")
+                    cols = st.columns(2)
+                    if r2_png.exists():
+                        cols[0].image(str(r2_png), caption="R² Score by Model", use_container_width=True)
+                    if mae_png.exists():
+                        cols[1].image(str(mae_png), caption="Real MAE by Model", use_container_width=True)               
+                
             except Exception as e:
                 st.error(f"❌ Training failed: {e}")
 
